@@ -24,8 +24,10 @@ final class BookContentLoader {
 
     static String load(ContentResolver resolver, Uri uri) throws Exception {
         String name = uri.toString().toLowerCase(Locale.ROOT);
-        if (name.endsWith(".fb2")) return loadFb2(resolver, uri);
-        if (name.endsWith(".epub")) return loadEpub(resolver, uri);
+        String type = resolver.getType(uri);
+        String mime = type == null ? "" : type.toLowerCase(Locale.ROOT);
+        if (name.endsWith(".epub") || mime.contains("epub") || looksLikeZip(resolver, uri)) return loadEpub(resolver, uri);
+        if (name.endsWith(".fb2") || mime.contains("fictionbook") || looksLikeFb2(resolver, uri)) return loadFb2(resolver, uri);
         return loadText(resolver, uri);
     }
 
@@ -44,19 +46,46 @@ final class BookContentLoader {
             XmlPullParser p = Xml.newPullParser();
             p.setInput(in, null);
             boolean body = false;
+            int paragraphDepth = 0;
+            StringBuilder paragraph = new StringBuilder();
             int event;
             while ((event = p.next()) != XmlPullParser.END_DOCUMENT) {
                 if (event == XmlPullParser.START_TAG) {
                     String tag = p.getName();
                     if ("body".equals(tag)) body = true;
-                    if (body && ("p".equals(tag) || "title".equals(tag) || "subtitle".equals(tag))) {
-                        String text = p.nextText().trim();
+                    if (body && paragraphDepth == 0 && ("p".equals(tag) || "subtitle".equals(tag))) {
+                        paragraph.setLength(0);
+                        paragraphDepth = 1;
+                    } else if (paragraphDepth > 0) paragraphDepth++;
+                } else if (event == XmlPullParser.TEXT && paragraphDepth > 0) {
+                    paragraph.append(p.getText());
+                } else if (event == XmlPullParser.END_TAG) {
+                    if (paragraphDepth > 0 && --paragraphDepth == 0) {
+                        String text = paragraph.toString().trim();
                         if (!text.isEmpty()) out.append(text).append("\n\n");
                     }
+                    if ("body".equals(p.getName())) body = false;
                 }
             }
         }
         return out.toString();
+    }
+
+    private static boolean looksLikeZip(ContentResolver resolver, Uri uri) {
+        try (InputStream in = resolver.openInputStream(uri)) {
+            return in != null && in.read() == 'P' && in.read() == 'K';
+        } catch (Exception ignored) { return false; }
+    }
+
+    private static boolean looksLikeFb2(ContentResolver resolver, Uri uri) {
+        try (InputStream in = resolver.openInputStream(uri)) {
+            if (in == null) return false;
+            byte[] head = new byte[4096];
+            int size = in.read(head);
+            if (size <= 0) return false;
+            String value = new String(head, 0, size, StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
+            return value.contains("<fictionbook") || value.contains(":fictionbook");
+        } catch (Exception ignored) { return false; }
     }
 
     private static String loadEpub(ContentResolver resolver, Uri uri) throws Exception {
@@ -110,4 +139,3 @@ final class BookContentLoader {
         Part(String name, String text) { this.name = name; this.text = text; }
     }
 }
-
