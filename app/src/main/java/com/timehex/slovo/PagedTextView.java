@@ -50,6 +50,11 @@ final class PagedTextView extends TextView {
 
     int pageCount() { return starts.size(); }
 
+    void repaginate() {
+        requestedProgress = progress();
+        post(this::paginate);
+    }
+
     @Override protected void onSizeChanged(int w, int h, int oldW, int oldH) {
         super.onSizeChanged(w, h, oldW, oldH);
         if (w != oldW || h != oldH) post(this::paginate);
@@ -107,4 +112,3 @@ final class PagedTextView extends TextView {
 
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
 }
-
