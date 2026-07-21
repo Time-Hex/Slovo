@@ -24,6 +24,7 @@ import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.MotionEvent;
+import android.view.ScaleGestureDetector;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -48,12 +49,13 @@ import java.util.Locale;
 public class MainActivity extends Activity {
     private static final int PICK_FILES = 101;
     private static final int PICK_FOLDER = 102;
-    private static final int INK = Color.rgb(9, 11, 24);
-    private static final int PANEL = Color.rgb(17, 20, 43);
-    private static final int VIOLET = Color.rgb(138, 114, 248);
-    private static final int IVORY = Color.rgb(244, 240, 232);
-    private static final int MUTED = Color.rgb(170, 168, 186);
-    private static final int LINE = Color.rgb(41, 45, 74);
+    private int INK;
+    private int PANEL;
+    private int VIOLET;
+    private int IVORY;
+    private int MUTED;
+    private int LINE;
+    private boolean lightTheme;
 
     private LibraryStore store;
     private FrameLayout content;
@@ -66,6 +68,9 @@ public class MainActivity extends Activity {
     private SeekBar audioSeek;
     private TextView audioTime;
     private Button playButton;
+    private float playbackSpeed = 1f;
+    private final ArrayList<Button> speedButtons = new ArrayList<>();
+    private static final float[] SPEED_VALUES = {0.25f, 0.5f, 1f, 1.5f, 2f};
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean userSeeking;
     private String readerTitle = "";
@@ -76,8 +81,11 @@ public class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        loadPalette();
         getWindow().setStatusBarColor(INK);
         getWindow().setNavigationBarColor(INK);
+        getWindow().getDecorView().setSystemUiVisibility(lightTheme
+                ? View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR : 0);
         store = new LibraryStore(this);
         buildShell();
         showLibrary("");
@@ -121,6 +129,31 @@ public class MainActivity extends Activity {
         b.setTextSize(12);
         b.setOnClickListener(v -> action.run());
         nav.addView(b, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1));
+    }
+
+    private void loadPalette() {
+        lightTheme = getSharedPreferences("slovo_settings", MODE_PRIVATE).getBoolean("light_theme", false);
+        if (lightTheme) {
+            INK = Color.rgb(246, 243, 236);
+            PANEL = Color.rgb(255, 255, 255);
+            VIOLET = Color.rgb(104, 82, 215);
+            IVORY = Color.rgb(28, 26, 42);
+            MUTED = Color.rgb(103, 99, 116);
+            LINE = Color.rgb(225, 220, 234);
+        } else {
+            INK = Color.rgb(9, 11, 24);
+            PANEL = Color.rgb(17, 20, 43);
+            VIOLET = Color.rgb(138, 114, 248);
+            IVORY = Color.rgb(244, 240, 232);
+            MUTED = Color.rgb(170, 168, 186);
+            LINE = Color.rgb(41, 45, 74);
+        }
+    }
+
+    private void saveTheme(boolean useLightTheme) {
+        if (lightTheme == useLightTheme) return;
+        getSharedPreferences("slovo_settings", MODE_PRIVATE).edit().putBoolean("light_theme", useLightTheme).apply();
+        recreate();
     }
 
     private void showLibrary(String query) {
@@ -291,12 +324,88 @@ public class MainActivity extends Activity {
         content.removeAllViews();
         LinearLayout body = column();
         body.setPadding(dp(18), dp(10), dp(18), dp(18));
-        TextView about = text("Slovo 0.3.0\n\nКниги остаются на вашем телефоне. Приложение работает без аккаунта, сервера и рекламы. Дополнительное озвучивание текста отсутствует.\n\nПоддержка: TXT, FB2, EPUB, PDF, MP3, M4B, M4A, AAC, OGG и WAV.", 16, IVORY);
+
+        LinearLayout themeCard = column();
+        themeCard.setPadding(dp(18), dp(16), dp(18), dp(16));
+        themeCard.setBackground(round(PANEL, 18));
+        TextView themeTitle = text("Оформление", 18, IVORY);
+        themeTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        themeCard.addView(themeTitle);
+        TextView themeHint = text("Выберите тему приложения", 13, MUTED);
+        themeHint.setPadding(0, dp(4), 0, dp(12));
+        themeCard.addView(themeHint);
+        LinearLayout themeButtons = row();
+        Button dark = button("Тёмная", !lightTheme);
+        dark.setOnClickListener(v -> saveTheme(false));
+        themeButtons.addView(dark, new LinearLayout.LayoutParams(0, dp(46), 1));
+        Button light = button("Светлая", lightTheme);
+        light.setOnClickListener(v -> saveTheme(true));
+        LinearLayout.LayoutParams lightParams = new LinearLayout.LayoutParams(0, dp(46), 1);
+        lightParams.leftMargin = dp(8);
+        themeButtons.addView(light, lightParams);
+        themeCard.addView(themeButtons);
+        body.addView(themeCard);
+
+        LinearLayout fontCard = column();
+        fontCard.setPadding(dp(18), dp(16), dp(18), dp(16));
+        fontCard.setBackground(round(PANEL, 18));
+        LinearLayout.LayoutParams fontCardParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        fontCardParams.topMargin = dp(12);
+        fontCard.setLayoutParams(fontCardParams);
+        TextView fontTitle = text("Шрифт книги", 18, IVORY);
+        fontTitle.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        fontCard.addView(fontTitle);
+        TextView fontHint = text("Размер меняется жестом двух пальцев", 13, MUTED);
+        fontHint.setPadding(0, dp(4), 0, dp(12));
+        fontCard.addView(fontHint);
+        String selectedFont = readerFontName();
+        LinearLayout fontRowOne = row();
+        addFontButton(fontRowOne, "Книжный", "serif", selectedFont);
+        addFontButton(fontRowOne, "Системный", "default", selectedFont);
+        fontCard.addView(fontRowOne);
+        LinearLayout fontRowTwo = row();
+        fontRowTwo.setPadding(0, dp(7), 0, 0);
+        addFontButton(fontRowTwo, "Без засечек", "sans", selectedFont);
+        addFontButton(fontRowTwo, "Моно", "mono", selectedFont);
+        fontCard.addView(fontRowTwo);
+        body.addView(fontCard);
+
+        TextView about = text("Slovo 0.4.0\n\nКниги остаются на вашем телефоне. Приложение работает без аккаунта, сервера и рекламы. Дополнительное озвучивание текста отсутствует.\n\nПоддержка: TXT, FB2, EPUB, PDF, MP3, M4B, M4A, AAC, OGG и WAV.", 16, IVORY);
         about.setLineSpacing(dp(4), 1f);
         about.setPadding(dp(18), dp(18), dp(18), dp(18));
         about.setBackground(round(PANEL, 18));
+        LinearLayout.LayoutParams aboutParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        aboutParams.topMargin = dp(12);
+        about.setLayoutParams(aboutParams);
         body.addView(about);
-        content.addView(body);
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(body);
+        content.addView(scroll);
+    }
+
+    private void addFontButton(LinearLayout row, String label, String value, String selected) {
+        Button option = button(label, value.equals(selected));
+        option.setTypeface(typefaceFor(value));
+        option.setOnClickListener(v -> {
+            getSharedPreferences("slovo_reader", MODE_PRIVATE).edit().putString("font", value).apply();
+            showSettings();
+        });
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(44), 1);
+        params.leftMargin = row.getChildCount() == 0 ? 0 : dp(7);
+        row.addView(option, params);
+    }
+
+    private String readerFontName() {
+        return getSharedPreferences("slovo_reader", MODE_PRIVATE).getString("font", "serif");
+    }
+
+    private Typeface readerTypeface() { return typefaceFor(readerFontName()); }
+
+    private Typeface typefaceFor(String value) {
+        if ("sans".equals(value)) return Typeface.SANS_SERIF;
+        if ("mono".equals(value)) return Typeface.MONOSPACE;
+        if ("default".equals(value)) return Typeface.DEFAULT;
+        return Typeface.SERIF;
     }
 
     private void openItem(LibraryStore.Item item) {
@@ -328,9 +437,10 @@ public class MainActivity extends Activity {
         applyReaderBrightness();
         LinearLayout page = column();
         PagedTextView book = new PagedTextView(this);
-        book.setTextSize(18);
+        float savedTextSize = getSharedPreferences("slovo_reader", MODE_PRIVATE).getFloat("text_size", 18f);
+        book.setTextSize(clamp(savedTextSize, 14f, 34f));
         book.setTextColor(IVORY);
-        book.setTypeface(Typeface.SERIF);
+        book.setTypeface(readerTypeface());
         book.setLineSpacing(dp(5), 1f);
         book.setGravity(Gravity.TOP);
         book.setPadding(dp(22), dp(18), dp(22), dp(18));
@@ -355,7 +465,7 @@ public class MainActivity extends Activity {
         footer.addView(next, new LinearLayout.LayoutParams(dp(48), dp(40)));
         page.addView(footer);
 
-        TextView hint = text("← → страницы     ↑ ↓ яркость", 12, MUTED);
+        TextView hint = text("← → страницы   ↑ ↓ яркость   ⇆ размер", 12, MUTED);
         hint.setGravity(Gravity.CENTER);
         hint.setPadding(0, 0, 0, dp(7));
         page.addView(hint);
@@ -368,7 +478,24 @@ public class MainActivity extends Activity {
         });
         previous.setOnClickListener(v -> book.previousPage());
         next.setOnClickListener(v -> book.nextPage());
-        attachReaderGestures(book, book::nextPage, book::previousPage);
+        ScaleGestureDetector scale = new ScaleGestureDetector(this, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            @Override public boolean onScale(ScaleGestureDetector detector) {
+                float density = getResources().getDisplayMetrics().scaledDensity;
+                float currentSp = book.getTextSize() / density;
+                float newSize = clamp(currentSp * detector.getScaleFactor(), 14f, 34f);
+                book.setTextSize(newSize);
+                showTextSizeHint(newSize);
+                return true;
+            }
+
+            @Override public void onScaleEnd(ScaleGestureDetector detector) {
+                float size = book.getTextSize() / getResources().getDisplayMetrics().scaledDensity;
+                getSharedPreferences("slovo_reader", MODE_PRIVATE).edit().putFloat("text_size", size).apply();
+                book.repaginate();
+                showTextSizeHint(size);
+            }
+        });
+        attachReaderGestures(book, book::nextPage, book::previousPage, scale);
         content.addView(page);
         book.setBookText(value, item.progress);
     }
@@ -430,6 +557,8 @@ public class MainActivity extends Activity {
     private void showAudio(LibraryStore.Item item) {
         enterReader(item.title);
         playingItem = item;
+        playbackSpeed = getSharedPreferences("slovo_audio", MODE_PRIVATE).getFloat("playback_speed", 1f);
+        speedButtons.clear();
         LinearLayout page = column();
         page.setGravity(Gravity.CENTER_HORIZONTAL);
         page.setPadding(dp(22), dp(36), dp(22), dp(26));
@@ -471,7 +600,31 @@ public class MainActivity extends Activity {
         next.setOnClickListener(v -> seekAudio(15000));
         controls.addView(next, new LinearLayout.LayoutParams(dp(72), dp(58)));
         page.addView(controls);
-        content.addView(page);
+
+        TextView speedTitle = text("Скорость воспроизведения", 15, IVORY);
+        speedTitle.setGravity(Gravity.CENTER);
+        speedTitle.setPadding(0, dp(18), 0, dp(8));
+        page.addView(speedTitle);
+        LinearLayout speeds = row();
+        for (float value : SPEED_VALUES) {
+            Button speed = button(speedLabel(value), sameSpeed(value, playbackSpeed));
+            speed.setTextSize(12);
+            speed.setOnClickListener(v -> setPlaybackSpeed(value));
+            speedButtons.add(speed);
+            LinearLayout.LayoutParams speedParams = new LinearLayout.LayoutParams(0, dp(43), 1);
+            speedParams.leftMargin = speeds.getChildCount() == 0 ? 0 : dp(5);
+            speeds.addView(speed, speedParams);
+        }
+        page.addView(speeds, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(43)));
+        TextView original = text("1× — оригинальное звучание", 12, MUTED);
+        original.setGravity(Gravity.CENTER);
+        original.setPadding(0, dp(7), 0, 0);
+        page.addView(original);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.addView(page);
+        content.addView(scroll);
         audioSeek.setOnSeekBarChangeListener(new SimpleSeek() {
             public void onStartTrackingTouch(SeekBar s) { userSeeking = true; }
             public void onStopTrackingTouch(SeekBar s) {
@@ -491,7 +644,7 @@ public class MainActivity extends Activity {
             player.setOnPreparedListener(mp -> {
                 if (position > 0 && position < mp.getDuration()) mp.seekTo((int) position);
                 item.durationMs = mp.getDuration();
-                if (autoplay) mp.start();
+                applyPlaybackSpeed(mp, autoplay);
                 updatePlayButton();
                 handler.post(updateAudio);
             });
@@ -535,6 +688,44 @@ public class MainActivity extends Activity {
         player.seekTo(target);
     }
 
+    private void setPlaybackSpeed(float value) {
+        playbackSpeed = value;
+        getSharedPreferences("slovo_audio", MODE_PRIVATE).edit().putFloat("playback_speed", value).apply();
+        updateSpeedButtons();
+        if (player != null) {
+            try { applyPlaybackSpeed(player, player.isPlaying()); }
+            catch (Exception ignored) { }
+        }
+    }
+
+    private void applyPlaybackSpeed(MediaPlayer mediaPlayer, boolean shouldPlay) {
+        try {
+            mediaPlayer.setPlaybackParams(mediaPlayer.getPlaybackParams().setSpeed(playbackSpeed).setPitch(1f));
+            if (shouldPlay && !mediaPlayer.isPlaying()) mediaPlayer.start();
+            if (!shouldPlay && mediaPlayer.isPlaying()) mediaPlayer.pause();
+        } catch (Exception ignored) {
+            if (shouldPlay) mediaPlayer.start();
+        }
+    }
+
+    private void updateSpeedButtons() {
+        for (int i = 0; i < speedButtons.size() && i < SPEED_VALUES.length; i++) {
+            boolean selected = sameSpeed(playbackSpeed, SPEED_VALUES[i]);
+            speedButtons.get(i).setBackground(round(selected ? VIOLET : LINE, 14));
+            speedButtons.get(i).setTextColor(selected ? Color.WHITE : IVORY);
+        }
+    }
+
+    private boolean sameSpeed(float a, float b) { return Math.abs(a - b) < 0.01f; }
+
+    private String speedLabel(float value) {
+        if (sameSpeed(value, 0.25f)) return "0.25×";
+        if (sameSpeed(value, 0.5f)) return "0.5×";
+        if (sameSpeed(value, 1f)) return "1×";
+        if (sameSpeed(value, 1.5f)) return "1.5×";
+        return "2×";
+    }
+
     private void updatePlayButton() { if (playButton != null && player != null) playButton.setText(player.isPlaying() ? "Ⅱ" : "▶"); }
 
     private void enterReader(String title) {
@@ -556,11 +747,16 @@ public class MainActivity extends Activity {
     }
 
     private void attachReaderGestures(View target, Runnable nextPage, Runnable previousPage) {
+        attachReaderGestures(target, nextPage, previousPage, null);
+    }
+
+    private void attachReaderGestures(View target, Runnable nextPage, Runnable previousPage, ScaleGestureDetector scaleDetector) {
         target.setClickable(true);
         final float[] downX = new float[1];
         final float[] downY = new float[1];
         final float[] startBrightness = new float[1];
         final boolean[] vertical = new boolean[1];
+        final boolean[] multiTouch = new boolean[1];
         target.setOnTouchListener((view, event) -> {
             float x = event.getRawX();
             float y = event.getRawY();
@@ -569,8 +765,11 @@ public class MainActivity extends Activity {
                 downY[0] = y;
                 startBrightness[0] = readerBrightness;
                 vertical[0] = false;
-                return true;
+                multiTouch[0] = false;
             }
+            if (scaleDetector != null) scaleDetector.onTouchEvent(event);
+            if (event.getPointerCount() > 1 || event.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN) multiTouch[0] = true;
+            if (multiTouch[0]) return true;
             float dx = x - downX[0];
             float dy = y - downY[0];
             if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
@@ -617,6 +816,12 @@ public class MainActivity extends Activity {
     private void showBrightnessHint() {
         handler.removeCallbacks(restoreReaderTitle);
         screenTitle.setText("Яркость " + Math.round(readerBrightness * 100) + "%");
+        handler.postDelayed(restoreReaderTitle, 700);
+    }
+
+    private void showTextSizeHint(float size) {
+        handler.removeCallbacks(restoreReaderTitle);
+        screenTitle.setText("Размер текста " + Math.round(size));
         handler.postDelayed(restoreReaderTitle, 700);
     }
 
