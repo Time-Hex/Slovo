@@ -23,8 +23,10 @@ import android.provider.OpenableColumns;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -66,6 +68,11 @@ public class MainActivity extends Activity {
     private Button playButton;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean userSeeking;
+    private String readerTitle = "";
+    private float readerBrightness = 0.65f;
+    private final Runnable restoreReaderTitle = () -> {
+        if ("reader".equals(screen)) screenTitle.setText(readerTitle);
+    };
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -284,7 +291,7 @@ public class MainActivity extends Activity {
         content.removeAllViews();
         LinearLayout body = column();
         body.setPadding(dp(18), dp(10), dp(18), dp(18));
-        TextView about = text("Slovo 0.2.0\n\nКниги остаются на вашем телефоне. Приложение работает без аккаунта, сервера и рекламы. Дополнительное озвучивание текста отсутствует.\n\nПоддержка: TXT, FB2, EPUB, PDF, MP3, M4B, M4A, AAC, OGG и WAV.", 16, IVORY);
+        TextView about = text("Slovo 0.3.0\n\nКниги остаются на вашем телефоне. Приложение работает без аккаунта, сервера и рекламы. Дополнительное озвучивание текста отсутствует.\n\nПоддержка: TXT, FB2, EPUB, PDF, MP3, M4B, M4A, AAC, OGG и WAV.", 16, IVORY);
         about.setLineSpacing(dp(4), 1f);
         about.setPadding(dp(18), dp(18), dp(18), dp(18));
         about.setBackground(round(PANEL, 18));
@@ -318,45 +325,57 @@ public class MainActivity extends Activity {
 
     private void renderText(LibraryStore.Item item, String value) {
         content.removeAllViews();
+        applyReaderBrightness();
         LinearLayout page = column();
-        ScrollView scroll = new ScrollView(this);
-        TextView book = text(value.isEmpty() ? "В книге не найден текст" : value, 18, IVORY);
+        PagedTextView book = new PagedTextView(this);
+        book.setTextSize(18);
+        book.setTextColor(IVORY);
         book.setTypeface(Typeface.SERIF);
         book.setLineSpacing(dp(5), 1f);
-        book.setPadding(dp(22), dp(18), dp(22), dp(30));
-        scroll.addView(book);
-        page.addView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
-        SeekBar seek = new SeekBar(this);
-        seek.setMax(1000);
-        seek.setProgress(item.progress * 10);
-        seek.setProgressTintList(ColorStateList.valueOf(VIOLET));
-        page.addView(seek, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)));
-        final boolean[] moving = {false};
-        seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            public void onStartTrackingTouch(SeekBar s) { moving[0] = true; }
-            public void onStopTrackingTouch(SeekBar s) {
-                moving[0] = false;
-                int range = Math.max(0, book.getHeight() - scroll.getHeight());
-                scroll.scrollTo(0, range * s.getProgress() / 1000);
-            }
-            public void onProgressChanged(SeekBar s, int p, boolean user) { }
-        });
-        scroll.setOnScrollChangeListener((v, x, y, oldX, oldY) -> {
-            int range = Math.max(1, book.getHeight() - scroll.getHeight());
-            int p = Math.max(0, Math.min(1000, y * 1000 / range));
-            if (!moving[0]) seek.setProgress(p);
-            item.progress = p / 10;
+        book.setGravity(Gravity.TOP);
+        book.setPadding(dp(22), dp(18), dp(22), dp(18));
+        page.addView(book, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+
+        ProgressBar progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progress.setMax(100);
+        progress.setProgress(item.progress);
+        progress.setProgressTintList(ColorStateList.valueOf(VIOLET));
+        progress.setProgressBackgroundTintList(ColorStateList.valueOf(LINE));
+        page.addView(progress, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4)));
+
+        LinearLayout footer = row();
+        footer.setGravity(Gravity.CENTER_VERTICAL);
+        footer.setPadding(dp(12), dp(6), dp(12), dp(8));
+        Button previous = button("‹", false);
+        footer.addView(previous, new LinearLayout.LayoutParams(dp(48), dp(40)));
+        TextView counter = text("Подготовка страниц…", 13, MUTED);
+        counter.setGravity(Gravity.CENTER);
+        footer.addView(counter, new LinearLayout.LayoutParams(0, dp(40), 1));
+        Button next = button("›", false);
+        footer.addView(next, new LinearLayout.LayoutParams(dp(48), dp(40)));
+        page.addView(footer);
+
+        TextView hint = text("← → страницы     ↑ ↓ яркость", 12, MUTED);
+        hint.setGravity(Gravity.CENTER);
+        hint.setPadding(0, 0, 0, dp(7));
+        page.addView(hint);
+
+        book.setPageListener((current, count, valueProgress) -> {
+            counter.setText("Страница " + current + " из " + count);
+            progress.setProgress(valueProgress);
+            item.progress = valueProgress;
             store.save();
         });
+        previous.setOnClickListener(v -> book.previousPage());
+        next.setOnClickListener(v -> book.nextPage());
+        attachReaderGestures(book, book::nextPage, book::previousPage);
         content.addView(page);
-        scroll.post(() -> {
-            int range = Math.max(0, book.getHeight() - scroll.getHeight());
-            scroll.scrollTo(0, range * item.progress / 100);
-        });
+        book.setBookText(value, item.progress);
     }
 
     private void showPdf(LibraryStore.Item item) {
         enterReader(item.title);
+        applyReaderBrightness();
         try {
             ParcelFileDescriptor fd = getContentResolver().openFileDescriptor(Uri.parse(item.uris.get(0)), "r");
             if (fd == null) throw new Exception("missing file");
@@ -389,6 +408,17 @@ public class MainActivity extends Activity {
                 store.save();
             };
             seek.setOnSeekBarChangeListener(new SimpleSeek() { public void onStopTrackingTouch(SeekBar bar) { draw.run(); } });
+            Runnable nextPage = () -> {
+                if (seek.getProgress() < seek.getMax()) { seek.setProgress(seek.getProgress() + 1); draw.run(); }
+            };
+            Runnable previousPage = () -> {
+                if (seek.getProgress() > 0) { seek.setProgress(seek.getProgress() - 1); draw.run(); }
+            };
+            attachReaderGestures(image, nextPage, previousPage);
+            TextView hint = text("← → страницы     ↑ ↓ яркость", 12, MUTED);
+            hint.setGravity(Gravity.CENTER);
+            hint.setPadding(0, 0, 0, dp(7));
+            page.addView(hint);
             content.addView(page);
             image.post(draw);
         } catch (Exception e) {
@@ -509,6 +539,7 @@ public class MainActivity extends Activity {
 
     private void enterReader(String title) {
         screen = "reader";
+        readerTitle = title;
         screenTitle.setText(title);
         nav.setVisibility(View.GONE);
         content.removeAllViews();
@@ -518,8 +549,75 @@ public class MainActivity extends Activity {
 
     private void leaveReader() {
         releasePlayer();
+        resetReaderBrightness();
+        handler.removeCallbacks(restoreReaderTitle);
         screenTitle.setOnClickListener(null);
         showLibrary("");
+    }
+
+    private void attachReaderGestures(View target, Runnable nextPage, Runnable previousPage) {
+        target.setClickable(true);
+        final float[] downX = new float[1];
+        final float[] downY = new float[1];
+        final float[] startBrightness = new float[1];
+        final boolean[] vertical = new boolean[1];
+        target.setOnTouchListener((view, event) -> {
+            float x = event.getRawX();
+            float y = event.getRawY();
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                downX[0] = x;
+                downY[0] = y;
+                startBrightness[0] = readerBrightness;
+                vertical[0] = false;
+                return true;
+            }
+            float dx = x - downX[0];
+            float dy = y - downY[0];
+            if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
+                if (!vertical[0] && Math.abs(dy) > dp(12) && Math.abs(dy) > Math.abs(dx) * 1.2f) vertical[0] = true;
+                if (vertical[0]) {
+                    float height = Math.max(dp(240), view.getHeight());
+                    readerBrightness = clamp(startBrightness[0] - dy / height, 0.05f, 1f);
+                    setWindowBrightness(readerBrightness);
+                    showBrightnessHint();
+                }
+                return true;
+            }
+            if (event.getActionMasked() == MotionEvent.ACTION_UP) {
+                if (vertical[0]) {
+                    getSharedPreferences("slovo_reader", MODE_PRIVATE).edit().putFloat("brightness", readerBrightness).apply();
+                    showBrightnessHint();
+                } else if (Math.abs(dx) > dp(55) && Math.abs(dx) > Math.abs(dy)) {
+                    if (dx < 0) nextPage.run(); else previousPage.run();
+                } else view.performClick();
+                return true;
+            }
+            return event.getActionMasked() != MotionEvent.ACTION_CANCEL;
+        });
+    }
+
+    private void applyReaderBrightness() {
+        readerBrightness = getSharedPreferences("slovo_reader", MODE_PRIVATE).getFloat("brightness", 0.65f);
+        readerBrightness = clamp(readerBrightness, 0.05f, 1f);
+        setWindowBrightness(readerBrightness);
+    }
+
+    private void setWindowBrightness(float value) {
+        WindowManager.LayoutParams params = getWindow().getAttributes();
+        params.screenBrightness = value;
+        getWindow().setAttributes(params);
+    }
+
+    private void resetReaderBrightness() {
+        WindowManager.LayoutParams params = getWindow().getAttributes();
+        params.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+        getWindow().setAttributes(params);
+    }
+
+    private void showBrightnessHint() {
+        handler.removeCallbacks(restoreReaderTitle);
+        screenTitle.setText("Яркость " + Math.round(readerBrightness * 100) + "%");
+        handler.postDelayed(restoreReaderTitle, 700);
     }
 
     private void pickFiles() {
@@ -668,6 +766,7 @@ public class MainActivity extends Activity {
     private String stripExtension(String name) { int p = name.lastIndexOf('.'); return p > 0 ? name.substring(0, p) : name; }
     private String join(Iterable<String> values) { StringBuilder s = new StringBuilder(); for (String value : values) { if (s.length() > 0) s.append(", "); s.append(value); } return s.toString(); }
     private String time(long ms) { long sec = Math.max(0, ms / 1000); return String.format(Locale.ROOT, "%02d:%02d", sec / 60, sec % 60); }
+    private float clamp(float value, float min, float max) { return Math.max(min, Math.min(max, value)); }
 
     private static class NamedUri { final String name; final Uri uri; NamedUri(String name, Uri uri) { this.name = name; this.uri = uri; } }
     private abstract static class SimpleSeek implements SeekBar.OnSeekBarChangeListener {
@@ -676,4 +775,3 @@ public class MainActivity extends Activity {
         public void onStopTrackingTouch(SeekBar s) { }
     }
 }
-
